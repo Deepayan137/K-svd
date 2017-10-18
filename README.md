@@ -22,3 +22,13 @@ Since this is a collaborative work, please follow the guidelines so that there i
 * Use 4 spaces for indentation
 * Add comments wherever necessary. Make your code as redable as possible.
 * pull this github repo before making any commit otherwise there can be a version error.
+
+## Runnnig the code
+''' bash
+python main.py -i imagename
+'''
+
+##output
+
+The output will give you 3 images, Orignal, Noisy and Reconstructed
+
