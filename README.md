@@ -24,9 +24,9 @@ Since this is a collaborative work, please follow the guidelines so that there i
 * pull this github repo before making any commit otherwise there can be a version error.
 
 ## Runnnig the code
-''' bash
+``` bash
 python main.py -i imagename
-'''
+```
 
 ##output
 
