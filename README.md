@@ -33,7 +33,7 @@ python main.py -i imagename -iter 500 -coeff 2 -n_comp 100
 2. -n_comp: number of components that the dictionary should contain
 3. -coeff: number of non zero coefficients in the sparse representation of the image
 
-##output
+## output
 
 The output will give you 3 images, Orignal, Noisy and Reconstructed
 
