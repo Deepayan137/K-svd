@@ -1,17 +1,14 @@
 import  numpy as np
 from numpy import *
 from PIL import Image
-
 import matplotlib.pyplot as plt
 from numpy import *
+import scipy
 import numpy as np
 from sklearn.linear_model import OrthogonalMatchingPursuit, orthogonal_mp_gram
 from sklearn.feature_extraction.image import extract_patches_2d
 from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 from sklearn.datasets import make_sparse_coded_signal
-
-import scipy
-
 from pylab import *
 from PIL import Image
 
@@ -28,176 +25,8 @@ args = parser.parse_args()
 #------------------------------------------- # 1 ----- I M A G E L O A +D --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
-# import scipy
-image = cv2.imread(args['image'], 0)
-
-def loadImage():
-    
-    im = Image.open("lena.png")
-    
-    im.show() 
-    im = im.convert("L") 
-    data = im.getdata()
-    data = np.matrix(data)
-    print data 
-    
-    data = np.reshape(data,(500,500))
-    grey_im = Image.fromarray(data.astype(np.uint8))
-    
-    grey_im.show()
-    grey_im.save('grey-lena.png')
-    
-   
-    data2 = 5 * np.random.randn(500,500) + data    
-
-    for i in range(1000):
-        randX=np.random.random_integers(0,data.shape[0]-1)  
-        randY=np.random.random_integers(0,data.shape[1]-1)  
-        if np.random.random_integers(0,1)==0:  
-            data[randX,randY]=255 
-  #      else:  
-  #          data[randX,randY]=255   
-    print data   
-    new_im = Image.fromarray(data2.astype(np.uint8))
-    
-    new_im.show()
-    new_im.save('new-lena3.png')
-
-loadImage()
-
-
 #-------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------- # 1 -----C T C -- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
-#-------------------------------------------------------------------------------------------------------------------#
-
-halfNoise = True;
-
-def ompcode(D, X, T):
-    gram = dot(D.T, D);
-    cov = dot(D.T, X.T);
-    
-    return orthogonal_mp_gram(gram, cov, T, None,);
-
-
-def ksvd(Y, K, T):
-    
-    global D, X;
-    
-    maxIter = 50;
-    maxErr = 0.1;
-    
-    (P, N) = Y.shape;
-    D = mat(np.random.rand(P, K));
-    Yt = Y.T;
-    
-    for i in range(K): 
-        D[:,i] /= np.linalg.norm(D[:,i])
-    J = 0;
-    while ( J < maxIter):
-            
-        X = ompcode(D,Yt,T);
-        for i in range(0, K):
-    
-            usedXi = nonzero(X[i,:])[0];
-    
-            if (len(usedXi) == 0):
-                    continue;     
-     
-            tmpX = X;
-            tmpX[i,:] = 0;
-    
-            ER = Y[:,usedXi] - dot(D,tmpX[:,usedXi])
-            U, s, V = np.linalg.svd(ER)
-    
-            X[i,usedXi] = s[0]*V[0,:]
-            D[:,i] = U[:,0]
-        
-        E = Y - dot(D,X)
-        Enorm = ( np.linalg.norm(E[:,i]) for i in range(0, N) )
-        err = max(Enorm)
-        
-        print('Iter: %d, err: %.3f' % (J, err));
-        if (err < maxErr):
-            break;
-        
-        J += 1;
-        
-    return D;
-        
-def mkdict():     
-    global D, patch_size, face, halfNoise;
-    if (halfNoise):
-        data = extract_patches_2d(face[:, :width // 2], patch_size, max_patches=5000)
-    else:
-        data = extract_patches_2d(face, patch_size, max_patches=5000)
-    data = data.reshape(data.shape[0], -1)
-    data -= np.mean(data, axis=0)
-    data /= np.std(data, axis=0);
-    D = ksvd(data.T, 100, 2);
-    dispdict();
-    
-def dispdict():
-    global D;
-    plt.figure()
-    for i in range(0, 100):
-        plt.subplot(10, 10, i + 1)
-        plt.imshow(D[:,i].reshape(patch_size), cmap=plt.cm.gray_r, interpolation='nearest')
-        plt.xticks(())
-        plt.yticks(())
-    plt.show();
-
-
-def denoise():
-    global D, patch_size, face, width, height, patches, data, ret, dico, code;
-    data = extract_patches_2d(face[:, width // 2:], patch_size)
-    data = data.reshape(data.shape[0], -1)
-    m = np.mean(data, axis=0)
-    data -= m;
-
-    
-    code = ompcode(D, data, 2).T;
-    patches = np.dot(code, D.T);
-    patches += m;
-    patches = np.array(patches).reshape(len(data), *patch_size)
-    ret = face.copy();
-    ret[:, width // 2:] = reconstruct_from_patches_2d(patches, (height, width // 2))
-    plt.figure()
-    plt.imshow(ret, cmap=plt.cm.gray, interpolation='nearest')
-    plt.show();
-
-y, X, w = make_sparse_coded_signal(n_samples=100,
-                                   n_components=8,
-                                   n_features=16,
-                                   n_nonzero_coefs=2,
-                                   random_state=0)
-
-face = mat(scipy.misc.face(gray=True))
-
-
-face = face / 255.0;
-face = face[::2, ::2] + face[1::2, ::2] + face[::2, 1::2] + face[1::2, 1::2]
-face /= 4.0
-
-height, width = face.shape;
-
-if halfNoise:
-    face[:, width // 2:] += 0.075 * np.random.randn(height, width // 2)
-else:
-    face += 0.075 * np.random.randn(height, width);
-    
-plt.figure()
-plt.imshow(face, cmap=plt.cm.gray, interpolation='nearest')
-plt.show();
-
-patch_size = (8, 8);
-
-mkdict();
-
-denoise();
-
-
-#-------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------- # 1 ----- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#------------------------------------------- # ONE ----- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
 def img2mat(s):
@@ -286,7 +115,9 @@ def SVD(Y,A,X):
 #        print A
 
         j += 1                  
-
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # TWO ----- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
 def ksvd(Y,T,maxErr):
     n =  Y.shape[0]    
     N =  Y.shape[1]    
@@ -374,7 +205,6 @@ def ksvd(Y,T,maxErr):
     
     out_im =Image.fromarray(ret.astype(np.uint8))
     out_im.show()    
-
 #Y = img2mat("new-lena2-100.png") 
 Y = img2mat("new-lena3.png")
 '''
@@ -397,9 +227,167 @@ A = np.matrix([[1,2],
 #omp(A,y)
 
 #OMP(A,Y)
-
 ksvd(Y,10000,1)
 
+# import scipy
+image = cv2.imread(args['image'], 0)
+
+def loadImage():
+    
+    im = Image.open("lena.png")
+    
+    im.show() 
+    im = im.convert("L") 
+    data = im.getdata()
+    data = np.matrix(data)
+    print data 
+    
+    data = np.reshape(data,(500,500))
+    grey_im = Image.fromarray(data.astype(np.uint8))
+    
+    grey_im.show()
+    grey_im.save('grey-lena.png')
+    
+   
+    data2 = 5 * np.random.randn(500,500) + data    
+
+    for i in range(1000):
+        randX=np.random.random_integers(0,data.shape[0]-1)  
+        randY=np.random.random_integers(0,data.shape[1]-1)  
+        if np.random.random_integers(0,1)==0:  
+            data[randX,randY]=255 
+  #      else:  
+  #          data[randX,randY]=255   
+    print data   
+    new_im = Image.fromarray(data2.astype(np.uint8))
+    
+    new_im.show()
+    new_im.save('new-lena3.png')
+
+loadImage()
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 -----C T C -- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+
+halfNoise = True;
+
+def ompcode(D, X, T):
+    gram = dot(D.T, D);
+    cov = dot(D.T, X.T);
+    
+    return orthogonal_mp_gram(gram, cov, T, None,);
+
+def ksvd(Y, K, T):
+    
+    global D, X;
+    
+    maxIter = 50;
+    maxErr = 0.1;
+    
+    (P, N) = Y.shape;
+    D = mat(np.random.rand(P, K));
+    Yt = Y.T;
+    
+    for i in range(K): 
+        D[:,i] /= np.linalg.norm(D[:,i])
+    J = 0;
+    while ( J < maxIter):
+            
+        X = ompcode(D,Yt,T);
+        for i in range(0, K):
+    
+            usedXi = nonzero(X[i,:])[0];
+    
+            if (len(usedXi) == 0):
+                    continue;     
+     
+            tmpX = X;
+            tmpX[i,:] = 0;
+    
+            ER = Y[:,usedXi] - dot(D,tmpX[:,usedXi])
+            U, s, V = np.linalg.svd(ER)
+    
+            X[i,usedXi] = s[0]*V[0,:]
+            D[:,i] = U[:,0]
+        
+        E = Y - dot(D,X)
+        Enorm = ( np.linalg.norm(E[:,i]) for i in range(0, N) )
+        err = max(Enorm)
+        
+        print('Iter: %d, err: %.3f' % (J, err));
+        if (err < maxErr):
+            break;
+        
+        J += 1;
+        
+    return D;
+        
+def mkdict():     
+    global D, patch_size, face, halfNoise;
+    if (halfNoise):
+        data = extract_patches_2d(face[:, :width // 2], patch_size, max_patches=5000)
+    else:
+        data = extract_patches_2d(face, patch_size, max_patches=5000)
+    data = data.reshape(data.shape[0], -1)
+    data -= np.mean(data, axis=0)
+    data /= np.std(data, axis=0);
+    D = ksvd(data.T, 100, 2);
+    dispdict();
+    
+def dispdict():
+    global D;
+    plt.figure()
+    for i in range(0, 100):
+        plt.subplot(10, 10, i + 1)
+        plt.imshow(D[:,i].reshape(patch_size), cmap=plt.cm.gray_r, interpolation='nearest')
+        plt.xticks(())
+        plt.yticks(())
+    plt.show();
+
+def denoise():
+    global D, patch_size, face, width, height, patches, data, ret, dico, code;
+    data = extract_patches_2d(face[:, width // 2:], patch_size)
+    data = data.reshape(data.shape[0], -1)
+    m = np.mean(data, axis=0)
+    data -= m;
+
+    
+    code = ompcode(D, data, 2).T;
+    patches = np.dot(code, D.T);
+    patches += m;
+    patches = np.array(patches).reshape(len(data), *patch_size)
+    ret = face.copy();
+    ret[:, width // 2:] = reconstruct_from_patches_2d(patches, (height, width // 2))
+    plt.figure()
+    plt.imshow(ret, cmap=plt.cm.gray, interpolation='nearest')
+    plt.show();
+
+y, X, w = make_sparse_coded_signal(n_samples=100,
+                                   n_components=8,
+                                   n_features=16,
+                                   n_nonzero_coefs=2,
+                                   random_state=0)
+
+face = mat(scipy.misc.face(gray=True))
+face = face / 255.0;
+face = face[::2, ::2] + face[1::2, ::2] + face[::2, 1::2] + face[1::2, 1::2]
+face /= 4.0
+height, width = face.shape;
+
+if halfNoise:
+    face[:, width // 2:] += 0.075 * np.random.randn(height, width // 2)
+else:
+    face += 0.075 * np.random.randn(height, width);
+    
+plt.figure()
+plt.imshow(face, cmap=plt.cm.gray, interpolation='nearest')
+plt.show();
+
+patch_size = (8, 8);
+
+mkdict();
+
+denoise();
 
 
 #-------------------------------------------------------------------------------------------------------------------#
@@ -517,10 +505,7 @@ OMP(Y,Y)
 #-------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------- # 1 ----- O M P---------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
-
-
 im = Image.open('new-lena.png')
-
 im.show()
 im = im.convert("L")
 im = im.getdata()
@@ -542,9 +527,7 @@ for k in range(0,500):
         dct_1d=dct_1d-np.mean(dct_1d)
     mat_dct_1d[:,k]=dct_1d/np.linalg.norm(dct_1d)
 
-
 img_cs_1d=np.dot(Phi,im)
-
 
 def cs_omp(y,D):    
 #    L=math.floor(3*(y.shape[0])/4)
@@ -579,7 +562,6 @@ image2.show()
 #-------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------- # 1 ----- S I G M A---------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
-  
 
 dataMat = [[1,2,3,4],[5,6,7,8],[9,10,11,12]]
 
