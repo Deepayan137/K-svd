@@ -32,3 +32,9 @@ python main.py -i imagename
 
 The output will give you 3 images, Orignal, Noisy and Reconstructed
 
+## Results: Deep
+
+[The above picture shows the distortion of the image Lena and its subsequent reconstruction using dictionary learning](Images/denoising.png)
+
+
+
