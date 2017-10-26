@@ -1,432 +1,577 @@
-from __future__ import division
+import  numpy as np
+from numpy import *
+from PIL import Image
+import matplotlib.pyplot as plt
+from numpy import *
+import scipy
 import numpy as np
-from numpy.linalg import inv, solve
-import time
-from lyssa.utils import get_mmap, get_empty_mmap, split_dataset
-from lyssa.utils.math import fast_dot, norm, normalize, norm_cols
-from .utils import approx_error, get_class_atoms, force_mi, average_mutual_coherence
-from scipy.linalg import svd
-from sklearn.utils.extmath import randomized_svd
-from lyssa.classify import classifier
-import warnings
-import sys
-from lyssa.utils import set_openblas_threads
-from lyssa.utils import fast_dot, gen_even_batches, gen_batches
-import sys
-from .utils import init_dictionary, normalize, norm_cols, approx_error
-from itertools import cycle
-from lyssa.utils import set_openblas_threads
+from sklearn.linear_model import OrthogonalMatchingPursuit, orthogonal_mp_gram
+from sklearn.feature_extraction.image import extract_patches_2d
+from sklearn.feature_extraction.image import reconstruct_from_patches_2d
+from sklearn.datasets import make_sparse_coded_signal
+from pylab import *
+from PIL import Image
 
 
-"""
-This module implements the KSVD algorithm of "K-SVD: An Algorithm for Designing Overcomplete
-Dictionaries for Sparse Representation" . To Run this Algorithm we should call the  ksvd_dict_learn function or create an instance of the ksvd_coder class
-"""
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- R E A D I N G - I M A G E -- F R O M - F O L D E R---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', type=str, required=True)
+parser.add_argument('--output', type=str, required=True)
+args = parser.parse_args()
 
-def ksvd(Y, D, X, n_cycles=1, verbose=True):
-    n_atoms = D.shape[1]
-    n_features, n_samples = Y.shape
-    unused_atoms = []
-    R = Y - fast_dot(D, X)
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- I M A G E L O A +D --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
 
-    for c in range(n_cycles):
-        for k in range(n_atoms):
-            if verbose:
-                sys.stdout.write("\r" + "k-svd..." + ":%3.2f%%" % ((k / float(n_atoms)) * 100))
-                sys.stdout.flush()
-            # find all the datapoints that use the kth atom
-            omega_k = X[k, :] != 0
-            if not np.any(omega_k):
-                unused_atoms.append(k)
-                continue
-            # the residual due to all the other atoms but k
-            Rk = R[:, omega_k] + np.outer(D[:, k], X[k, omega_k])
-            U, S, V = randomized_svd(Rk, n_components=1, n_iter=10, flip_sign=False)
-            D[:, k] = U[:, 0]
-            X[k, omega_k] = V[0, :] * S[0]
-            # update the residual
-            R[:, omega_k] = Rk - np.outer(D[:, k], X[k, omega_k])
-        print ""
-    return D, X, unused_atoms
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # ONE ----- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
 
-"""
-The below function implements the non-negative variant KSVD algorithm 
-"""
+def img2mat(s):
+     im = Image.open(s)
+     im.show()
+    im = im.convert("L")
+    data = im.getdata()
+    data = np.matrix(data)
+    data = np.reshape(data,(500,500)).astype(float)
+#    print data
+    return data
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- O M P  A l g o r i t h m ---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+def omp(A,y):
+     r = y 
+     indx = []
+     j = 0 
+     n = A.shape[0] 
+     K = A.shape[1]
+      x = np.zeros(K).reshape(K,1)
+      l = np.nonzero(x)    
+       _l = len(l[0])
+       S = K/500+2
+        
+         while _l < S :
+             temp = np.fabs(np.dot(A.T, r))
+             i = np.argmax(temp)
+             indx.append(i)    
+             _A = A[:,indx[0:j+1]]
+              _x = np.dot(np.linalg.pinv(_A),y)
+              r = y - np.dot(_A,_x)    
+              l = np.nonzero(_x)
+               _l = len(l[0])
+               j += 1     
+                x[indx] = _x
+                 return x            
+              
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- S V D  A l g o r i t h m ---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+def SVD(Y,A,X):
+    #    print "\nSVD"
+    K = A.shape[1] 
+    n =  Y.shape[0] 
+     j = 0
+     while j < K :
+         a = A[:,j] 
+         #        print "\na:"
+         #        print a
+         x = X[j,:]  
+         #        print "\nx:" 
+         #        print x
+         indx = np.nonzero(x) 
+         #        print "\nindex:"+str(indx[0]) 
+         if (len(indx[0]) == 0):
+             #            print "continue"
+              j += 1
+              continue;
+           _x = x[indx] 
+           #        print "\n_x:"
+           #        print _x
+              _X = X[:,indx].reshape(K,indx[0].shape[0])
+              _X[j,:] = 0 
+              #        print "\n_X:" 
+              #        print _X
+              _Y = Y[:,indx].reshape(n,indx[0].shape[0]) 
+              #        print "\n_Y:"   
+              #        print _Y
+                      _E = _Y - np.dot(A,_X) 
+                      #        print "\n_E:" 
+                      #        print _E
+                      U,Sigma,VT = np.linalg.svd(_E) 
+                      #        print "\nU:"  
+                      #        print U
+#        print "\nSigma:"     
+#        print Sigma
+#        print "\nVT:"        
+#        print VT
 
-def nn_ksvd(Y, D, X, n_cycles=1, verbose=True):
-    # the non-negative variant
-    n_atoms = D.shape[1]
-    n_features, n_samples = Y.shape
-    unused_atoms = []
-    R = Y - fast_dot(D, X)
+        X[j,indx] = Sigma[0]*VT[0,:]
+#        print "\nX:"            
+#        print X
+        A[:,j] = U[:,0]         
+#        print "\nA:"           
+#        print A
 
-    for k in range(n_atoms):
-        if verbose:
-            sys.stdout.write("\r" + "k-svd..." + ":%3.2f%%" % ((k / float(n_atoms)) * 100))
-            sys.stdout.flush()
-        # find all the datapoints that use the kth atom
-        omega_k = X[k, :] != 0
-        if not np.any(omega_k):
-            unused_atoms.append(k)
-            continue
-        # the residual due to all the other atoms but k
-        Rk = R[:, omega_k] + np.outer(D[:, k], X[k, omega_k])
-        try:
-            U, S, V = randomized_svd(Rk, n_components=1, n_iter=50, flip_sign=False)
-        except:
-            warnings.warn('SVD error')
-            continue
-
-        d = U[:, 0]
-        x = V[0, :] * S[0]
-        # projection to the constraint set
-        d[d < 0] = 0
-        x[x < 0] = 0
-
-        dTd = np.dot(d, d)
-        xTx = np.dot(x, x)
-        if dTd <= np.finfo('float').eps or xTx <= np.finfo('float').eps:
-            continue
-
-        for j in range(n_cycles):
-            d = np.dot(Rk, x) / np.dot(x, x)
-            d[d < 0] = 0
-            x = np.dot(d.T, Rk) / np.dot(d, d)
-            x[x < 0] = 0
-
-        _norm = norm(d)
-        d = d / _norm
-        x = x * _norm
-        D[:, k] = d
-        X[k, omega_k] = x
-        # update the residual
-        R[:, omega_k] = Rk - np.outer(D[:, k], X[k, omega_k])
-    print ""
-    return D, X, unused_atoms
-"""
-The below function implements the approximate KSVD algorithm 
-"""
-
-def approx_ksvd(Y, D, X, n_cycles=1, verbose=True):
-  
-    n_atoms = D.shape[1]
-    n_features, n_samples = Y.shape
-    unused_atoms = []
-    R = Y - fast_dot(D, X)
-
-    for c in range(n_cycles):
-        for k in range(n_atoms):
-            if verbose:
-                sys.stdout.write("\r" + "k-svd..." + ":%3.2f%%" % ((k / float(n_atoms)) * 100))
-                sys.stdout.flush()
-            # find all the datapoints that use the kth atom
-            omega_k = X[k, :] != 0
-            if not np.any(omega_k):
-                # print "this atom is not used"
-                unused_atoms.append(k)
-                continue
-            Rk = R[:, omega_k] + np.outer(D[:, k], X[k, omega_k])
-            # update of D[:,k]
-            D[:, k] = np.dot(Rk, X[k, omega_k])
-            D[:, k] = normalize(D[:, k])
-            # update of X[:,k]
-            X[k, omega_k] = np.dot(Rk.T, D[:, k])
-            # update the residual
-            R[:, omega_k] = Rk - np.outer(D[:, k], X[k, omega_k])
-        print ""
-
-    return D, X, unused_atoms
-
-
-def ksvd_dict_learn(X, n_atoms, init_dict='data', sparse_coder=None,
-                    max_iter=20, non_neg=False, approx=False, eta=None,
-                    n_cycles=1, n_jobs=1, mmap=False, verbose=True):
-    """
-    The K-SVD algorithm
-
-    X: the data matrix of shape (n_features,n_samples)
-    n_atoms: the number of atoms in the dictionary
-    sparse_coder: must be an instance of the sparse_coding.sparse_encoder class
-    approx: if true, invokes the approximate KSVD algorithm
-    max_iter: the maximum number of iterations
-    non_neg: if set to True, it uses non-negativity constraints
-    n_cycles: the number of updates per atom (Dictionary Update Cycles)
-    n_jobs: the number of CPU threads
-    mmap: if set to True, the algorithm applies memory mapping to save memory
-    """
-    n_features, n_samples = X.shape
-    shape = (n_atoms, n_samples)
-    Z = np.zeros(shape)
-    # dictionary initialization
-    # track the datapoints that are not used as atoms
-    unused_data = []
-    if init_dict == 'data':
-        from .utils import init_dictionary
-        D, unused_data = init_dictionary(X, n_atoms, method=init_dict, return_unused_data=True)
-    else:
-        D = np.copy(init_dict)
-
-    if mmap:
-        D = get_mmap(D)
-        sparse_coder.mmap = True
-
-    print "dictionary initialized"
-    max_patience = 10
-    error_curr = 0
-    error_prev = 0
-    it = 0
-    patience = 0
-    approx_errors = []
-
-    while it < max_iter and patience < max_patience:
-        print "----------------------------"
-        print "iteration", it
-        print ""
-        it_start = time.time()
-        if verbose:
-            t_sparse_start = time.time()
-        # sparse coding
-        Z = sparse_coder(X, D)
-        if verbose:
-            t_sparse_duration = time.time() - t_sparse_start
-            print "sparse coding took", t_sparse_duration, "seconds"
-            t_dict_start = time.time()
-
-        # ksvd to learn the dictionary
-        set_openblas_threads(n_jobs)
-        if approx:
-            D, _, unused_atoms = approx_ksvd(X, D, Z, n_cycles=n_cycles)
-        elif non_neg:
-            D, _, unused_atoms = nn_ksvd(X, D, Z, n_cycles=it)
-        else:
-            D, _, unused_atoms = ksvd(X, D, Z, n_cycles=n_cycles)
-        set_openblas_threads(1)
-        if verbose:
-            t_dict_duration = time.time() - t_dict_start
-            print "K-SVD took", t_dict_duration, "seconds"
-            print ""
-        if verbose:
-            print "number of unused atoms:", len(unused_atoms)
-        # replace the unused atoms in the dictionary
-        for j in range(len(unused_atoms)):
-            # no datapoint available to be used as atom
-            if len(unused_data) == 0:
-                break
-            _idx = np.random.choice(unused_data, size=1)
-            idx = _idx[0]
-            D[:, unused_atoms[j]] = X[:, idx]
-            D[:, unused_atoms[j]] = normalize(D[:, unused_atoms[j]])
-            unused_data.remove(idx)
-
-        if eta is not None:
-            # do not force incoherence in the last iteration
-            if it < max_iter - 1:
-                # force Mutual Incoherence
-                D, unused_data = force_mi(D, X, Z, unused_data, eta)
-        if verbose:
-            amc = average_mutual_coherence(D)
-            print "average mutual coherence:", amc
-
-        it_duration = time.time() - it_start
-        # calculate the approximation error
-        error_curr = approx_error(D, Z, X, n_jobs=2)
-        approx_errors.append(error_curr)
-        if verbose:
-            print "error:", error_curr
-            print "error difference:", (error_curr - error_prev)
-            error_prev = error_curr
-        print "duration:", it_duration, "seconds"
-        if (it > 0) and (error_curr > 0.9 * error_prev or error_curr > error_prev):
-            patience += 1
-        it += 1
-    print ""
-    return D, Z
-
-
-class ksvd_coder():
-    """
-    a wrapper to the ksvd_dict_learn function
-    """
-
-    def __init__(self, n_atoms=None, n_nonzero_coefs=None, sparse_coder=None, init_dict="data",
-                 max_iter=None, non_neg=False, approx=True, eta=None, n_cycles=1, n_jobs=1,
-                 mmap=False, verbose=True):
-        self.n_atoms = n_atoms
-        self.sparse_coder = sparse_coder
-        self.max_iter = max_iter
-        self.non_neg = non_neg
-        self.approx = approx
-        self.eta = eta
-        self.n_jobs = n_jobs
-        self.init_dict = init_dict
-        self.n_cycles = n_cycles
-        self.verbose = verbose
-        self.mmap = mmap
-        self.D = None
-
-    def _fit(self, X):
-        D, _ = ksvd_dict_learn(X, self.n_atoms, init_dict=self.init_dict,
-                               sparse_coder=self.sparse_coder, max_iter=self.max_iter,
-                               non_neg=self.non_neg, approx=self.approx, eta=self.eta, n_cycles=self.n_cycles,
-                               n_jobs=self.n_jobs, mmap=self.mmap, verbose=self.verbose)
-        self.D = D
-
-    def __call__(self, X):
-        self._fit(X)
-        Z = self.sparse_coder(X, self.D)
-        return Z
-
-    def fit(self, X):
-        self._fit(X)
-
-    def encode(self, X):
-        return self.sparse_coder(X, self.D)
-
-    def print_params(self):
-        pass
-
-"""
-    X: the data matrix of shape (n_features,n_samples)
-    n_atoms: the number of atoms in the dictionary
-    sparse_coder: must be an instance of the sparse_coding.sparse_encoder class
-    batch_size: the number of datapoints in each iteration
-    D_init: the initial dictionary. If None, we initialize it with randomly
-            selected datapoints.
-    eta: the learning rate
-    mu:  the mutual coherence penalty
-    n_epochs: the number of times we iterate over the dataset
-    non_neg: if set to True, it uses non-negativity constraints
-    n_jobs: the number of CPU threads
-    mmap: if set to True, the algorithm applies memory mapping to save memory
-
-    Note that a	large batch_size implies
-    faster execution but high memory overhead, while
-    a smaller batch_size implies
-    slower execution but low memory overhead
-    """
-
-def online_dict_learn(X, n_atoms, sparse_coder=None, batch_size=None, A=None, B=None, D_init=None,
-                      beta=None, n_epochs=1, verbose=False, n_jobs=1, non_neg=False, mmap=False):
+        j += 1                  
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # TWO ----- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+def ksvd(Y,T,maxErr):
+    n =  Y.shape[0]    
+    N =  Y.shape[1]    
+#    K = N/4 + 2      
+    K = N * 3        
     
+    X = np.zeros(K * N).reshape(K, N) 
+#    A = Y[:,:K]   
+    
+    A = mat(np.random.rand(n,K))   
 
-    # dont monitor sparse coding
-    sparse_coder.verbose = False
-    n_features, n_samples = X.shape
-    # initialize using the data
-    if D_init is None:
-        D, unused_data = init_dictionary(X, n_atoms, method='data', return_unused_data=True)
-    else:
-        D = D_init
-    print "dictionary initialized"
-    if mmap:
-        D = get_mmap(D)
+#    A[:,:N] = Y       
+#    A[:,N:2*N] = Y
+#    A[:,2*N:K] = Y
+    
+    print "\nY:"+str(Y) 
+#    print "\nA:"+str(A)    
 
-    batch_idx = gen_batches(n_samples, batch_size=batch_size)
-    n_batches = len(batch_idx)
-    n_iter = n_batches
-    n_total_iter = n_epochs * n_iter
-    _eps = np.finfo(float).eps
+    i = 0       
+    while i < T: 
+#        print "\niter:"+str(i)    
+        X = OMP(A,Y)            
+#        print "\nX:"+str(X)    
+        
+        SVD(Y,A,X)           
+        
+        E = Y - np.dot(A,X)  
+        Enorm = ( np.linalg.norm(E[:,j]) for j in range(0, Y.shape[1]))
+        err = max(Enorm)        
+        
+        print('\nIter: %d, err: %.3f' % (i, err)); 
+        if (err < maxErr):      
+            break;              
 
-    if n_jobs > 1:
-        set_openblas_threads(n_jobs)
+        out = np.dot(A,X)
+        X_adj = np.matrix.getH(mat(X))
+       # out = dot(A,X_adj)
+       # out_im =Image.fromarray(out.astype(np.uint8))
+       # out_im.show()
 
-    if A is None and B is None:
-        A = np.zeros((n_atoms, n_atoms))
-        B = np.zeros((n_features, n_atoms))
+        i += 1
 
-    if beta is None:
-        # create a sequence that converges to one
-        beta = np.linspace(0, 1, num=n_iter)
-    else:
-        beta = np.zeros(n_iter) + beta
+    print "\nX:"  
+    print X 
+    print "\nA:"   
+    print A 
 
-    max_patience = 10
-    error_curr = 0
-    error_prev = 0
-    patience = 0
-    approx_errors = []
-    incs = []
-    for e in range(n_epochs):
-        # cycle over the batches
-        for i, batch in zip(range(n_iter), cycle(batch_idx)):
-            X_batch = X[:, batch]
-            # sparse coding step
-            Z_batch = sparse_coder(X_batch, D)
-            # update A and B
-            A = beta[i] * A + fast_dot(Z_batch, Z_batch.T)
-            B = beta[i] * B + fast_dot(X_batch, Z_batch.T)
-            if verbose:
-                progress = float((e * n_iter) + i) / n_total_iter
-                sys.stdout.write("\r" + "dictionary learning" + "...:%3.2f%%" % (progress * 100))
-                sys.stdout.flush()
+    out = np.dot(A,X)
+    out_im =Image.fromarray(out.astype(np.uint8))
+    out_im.show()
+    X_adj = np.matrix.getH(mat(X))
+#    out = dot(A,X_adj)
+    print "\nAX:"+str(out)
+#    print str(A.shape[0])+str(A.shape[1])
+#    print str(X.shape[0])+str(X.shape[1])
+#    print str(out.shape[0])+str(out.shape[1])
+    out_im =Image.fromarray(out.astype(np.uint8))
+    out_im.show()
 
-            DA = fast_dot(D, A)
-            # this part could also be parallelized w.r.t the atoms
-            for k in xrange(n_atoms):
-                D[:, k] = (1 / (A[k, k] + _eps)) * (B[:, k] - DA[:, k]) + D[:, k]
-            # enforce non-negativity constraints
-            if non_neg:
-                D[D < 0] = 0
-            D = norm_cols(D)
-        # replace_unused_atoms(A,unused_data,i)
+    from sklearn.feature_extraction.image import extract_patches_2d
+    from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 
-        if e < n_epochs - 1:
-            if patience >= max_patience:
-                return D, A, B
-            print ""
-            print "end of epoch {0}".format(e)
-            error_curr = 0
-            for i, batch in zip(range(n_iter), cycle(batch_idx)):
-                X_batch = X[:, batch]
-                # sparse coding step
-                Z_batch = sparse_coder(X_batch, D)
-                error_curr += approx_error(D, Z_batch, X_batch, n_jobs=n_jobs)
-            if verbose:
-                print ""
-                print "error:", error_curr
-                print "error difference:", (error_curr - error_prev)
-                error_prev = error_curr
-            if (e > 0) and (error_curr > 0.9 * error_prev or error_curr > error_prev):
-                patience += 1
+#    data = extract_patches_2d(Y, (8,8))
+#    data = data.reshape(data.shape[0], -1)
+    data = Y
+    m = np.mean(data, axis=0)
+    data -= m;
 
-    if verbose:
-        sys.stdout.write("\r" + "dictionary learning" + "...:%3.2f%%" % (100))
-        sys.stdout.flush()
-        print ""
-    return D, A, B
+    print data
 
- """
-    a wrapper of the online_dict_learn function
-    """
-class online_dictionary_coder():
+#    code = ompcode(A, data, 2).T;
+    code = OMP(A, data);
+    patches = np.dot(A,code);
+
+#    patch_size = (8,8)
+    patches += m;
+#    patches = np.array(patches).reshape(len(data), *patch_size)
+#    ret = Y.copy();
+    ret = patches
+ #   ret[:, 100 // 2:] = reconstruct_from_patches_2d(patches, (100, 100 // 2))
+#    plt.figure()
+#    plt.imshow(ret, cmap=plt.cm.gray, interpolation='nearest')
+
+#    plt.show();
+    
+    out_im =Image.fromarray(ret.astype(np.uint8))
+    out_im.show()    
+#Y = img2mat("new-lena2-100.png") 
+Y = img2mat("new-lena3.png")
+'''
+Y = np.matrix([[0.0,2.0,3.0,4.0],
+               [5.0,6.0,7.0,8.0],
+               [9.0,1.0,11.0,12.0],
+               [13.0,1.0,15.0,16.0],
+               [17.0,18.0,19.0,20.0],
+               [21.0,22.0,23.0,24.0],
+               ])
+A = np.matrix([[1,2],  
+               [3,4],   
+               [5,6],   
+               [7,8],   
+               [9,10],  
+               [11,12], 
+               ])
+'''
+#y = Y[:,0]
+#omp(A,y)
+
+#OMP(A,Y)
+ksvd(Y,10000,1)
+
+# import scipy
+image = cv2.imread(args['image'], 0)
+
+def loadImage():
+    
+    im = Image.open("lena.png")
+    
+    im.show() 
+    im = im.convert("L") 
+    data = im.getdata()
+    data = np.matrix(data)
+    print data 
+    
+    data = np.reshape(data,(500,500))
+    grey_im = Image.fromarray(data.astype(np.uint8))
+    
+    grey_im.show()
+    grey_im.save('grey-lena.png')
+    
    
+    data2 = 5 * np.random.randn(500,500) + data    
 
-    def __init__(self, n_atoms=None, sparse_coder=None, batch_size=None, beta=None, D_init=None,
-                 n_epochs=1, verbose=False, memory="low", mmap=False, non_neg=False, n_jobs=1):
-        self.n_atoms = n_atoms
-        self.sparse_coder = sparse_coder
-        self.batch_size = batch_size
-        self.beta = beta
-        self.n_epochs = n_epochs
-        self.A = None
-        self.B = None
-        self.D_init = D_init
-        self.memory = memory
-        self.verbose = verbose
-        self.n_jobs = n_jobs
-        self.mmap = mmap
-        self.non_neg = non_neg
+    for i in range(1000):
+        randX=np.random.random_integers(0,data.shape[0]-1)  
+        randY=np.random.random_integers(0,data.shape[1]-1)  
+        if np.random.random_integers(0,1)==0:  
+            data[randX,randY]=255 
+  #      else:  
+  #          data[randX,randY]=255   
+    print data   
+    new_im = Image.fromarray(data2.astype(np.uint8))
+    
+    new_im.show()
+    new_im.save('new-lena3.png')
 
-    def __call__(self, X):
-        self.fit(X)
-        return self.encode(X)
+loadImage()
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 -----C T C -- K S V D - A L G O R I T H M --This module implements the KSVD algorithm of "K-SVD:----------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
 
-    def fit(self, X):
-        self.D, self.A, self.B = online_dict_learn(X, self.n_atoms, sparse_coder=self.sparse_coder,
-                                                   batch_size=self.batch_size, A=self.A, B=self.B, D_init=self.D_init,
-                                                   beta=self.beta, n_epochs=self.n_epochs, verbose=self.verbose,
-                                                   n_jobs=self.n_jobs, non_neg=self.non_neg, mmap=self.mmap)
+halfNoise = True;
 
-    def encode(self, X):
-        Z = self.sparse_coder(X, self.D)
-        return Z
+def ompcode(D, X, T):
+    gram = dot(D.T, D);
+    cov = dot(D.T, X.T);
+    
+    return orthogonal_mp_gram(gram, cov, T, None,);
+
+def ksvd(Y, K, T):
+    
+    global D, X;
+    
+    maxIter = 50;
+    maxErr = 0.1;
+    
+    (P, N) = Y.shape;
+    D = mat(np.random.rand(P, K));
+    Yt = Y.T;
+    
+    for i in range(K): 
+        D[:,i] /= np.linalg.norm(D[:,i])
+    J = 0;
+    while ( J < maxIter):
+            
+        X = ompcode(D,Yt,T);
+        for i in range(0, K):
+    
+            usedXi = nonzero(X[i,:])[0];
+    
+            if (len(usedXi) == 0):
+                    continue;     
+     
+            tmpX = X;
+            tmpX[i,:] = 0;
+    
+            ER = Y[:,usedXi] - dot(D,tmpX[:,usedXi])
+            U, s, V = np.linalg.svd(ER)
+    
+            X[i,usedXi] = s[0]*V[0,:]
+            D[:,i] = U[:,0]
+        
+        E = Y - dot(D,X)
+        Enorm = ( np.linalg.norm(E[:,i]) for i in range(0, N) )
+        err = max(Enorm)
+        
+        print('Iter: %d, err: %.3f' % (J, err));
+        if (err < maxErr):
+            break;
+        
+        J += 1;
+        
+    return D;
+        
+def mkdict():     
+    global D, patch_size, face, halfNoise;
+    if (halfNoise):
+        data = extract_patches_2d(face[:, :width // 2], patch_size, max_patches=5000)
+    else:
+        data = extract_patches_2d(face, patch_size, max_patches=5000)
+    data = data.reshape(data.shape[0], -1)
+    data -= np.mean(data, axis=0)
+    data /= np.std(data, axis=0);
+    D = ksvd(data.T, 100, 2);
+    dispdict();
+    
+def dispdict():
+    global D;
+    plt.figure()
+    for i in range(0, 100):
+        plt.subplot(10, 10, i + 1)
+        plt.imshow(D[:,i].reshape(patch_size), cmap=plt.cm.gray_r, interpolation='nearest')
+        plt.xticks(())
+        plt.yticks(())
+    plt.show();
+
+def denoise():
+    global D, patch_size, face, width, height, patches, data, ret, dico, code;
+    data = extract_patches_2d(face[:, width // 2:], patch_size)
+    data = data.reshape(data.shape[0], -1)
+    m = np.mean(data, axis=0)
+    data -= m;
+
+    
+    code = ompcode(D, data, 2).T;
+    patches = np.dot(code, D.T);
+    patches += m;
+    patches = np.array(patches).reshape(len(data), *patch_size)
+    ret = face.copy();
+    ret[:, width // 2:] = reconstruct_from_patches_2d(patches, (height, width // 2))
+    plt.figure()
+    plt.imshow(ret, cmap=plt.cm.gray, interpolation='nearest')
+    plt.show();
+
+y, X, w = make_sparse_coded_signal(n_samples=100,
+                                   n_components=8,
+                                   n_features=16,
+                                   n_nonzero_coefs=2,
+                                   random_state=0)
+
+face = mat(scipy.misc.face(gray=True))
+face = face / 255.0;
+face = face[::2, ::2] + face[1::2, ::2] + face[::2, 1::2] + face[1::2, 1::2]
+face /= 4.0
+height, width = face.shape;
+
+if halfNoise:
+    face[:, width // 2:] += 0.075 * np.random.randn(height, width // 2)
+else:
+    face += 0.075 * np.random.randn(height, width);
+    
+plt.figure()
+plt.imshow(face, cmap=plt.cm.gray, interpolation='nearest')
+plt.show();
+
+patch_size = (8, 8);
+
+mkdict();
+
+denoise();
+
+
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 -----M Y O M P---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+
+
+def img2mat(s):
+    
+    im = Image.open(s)
+    
+    im.show()
+    im = im.convert("L")
+    data = im.getdata()
+    data = np.matrix(data)
+    data = np.reshape(data,(500,500))
+    print data
+    return data
+
+def omp(A,y): 
+    
+    print "\nA:"+str(A)
+    print "\ny:"+str(y)
+    
+    r = y 
+    print "\nr:"+str(r)
+    indx = [] 
+    j = 0 
+    n = A.shape[0] 
+    K = A.shape[1] 
+    x = np.zeros(K).reshape(K,1) 
+    print "\nx"+str(x)
+    print "\nn="+str(n)
+
+    while j < n/2:
+        print "\nj:"+str(j)+"-----------------------"
+        print "\nA.T"+str(A.T)
+        temp = np.fabs(np.dot(A.T, r))
+        print "\ntemp:"+str(temp)
+        i = np.argmax(temp)
+        print "\ni:"+str(i)
+        indx.append(i)
+        print "\nindex[0:j+1]:"+str(indx[0:j+1])
+        _A = A[:,indx[0:j+1]]
+        print "\n_A:"+str(_A)
+        print "\npinv(_A)"+str(np.linalg.pinv(_A))
+        _x = np.dot(np.linalg.pinv(_A),y)
+        print "\n_x:"+str(_x)
+        r = y - np.dot(_A,_x)
+        print "\nr:"+str(r)
+        j += 1 
+    x[indx] = _x
+    print "\nx:"+str(x)
+    return x
+
+def cs_omp(y,D):    
+    L=3
+    residual=y  
+    index=np.zeros((L),dtype=int)
+    for i in range(L):
+        index[i]= -1
+    result=np.zeros((256))
+    for j in range(L):  
+        product=np.fabs(np.dot(D.T,residual))
+        pos=np.argmax(product)          
+        index[j]=pos
+        print "\n"+str(index)
+        print str(D[:,index>=0])
+        my=np.linalg.pinv(D[:,index[0:j+1]])            
+        a=np.dot(my,y)      
+        print "\na:"+str(a)
+        residual=y-np.dot(D[:,index>=0],a)
+   # result[index>=0]=a
+   # return  result
+
+def OMP(A,Y): 
+    N =  Y.shape[1] 
+    K =  A.shape[1] 
+    X = np.zeros(K * N).reshape(K, N) 
+    j = 0
+    while j < N:
+        x = omp(A,Y[:,j])
+        print str(X[:,j])
+        X[:,j] = x.reshape(K)
+        j += 1
+    print str(X)         
+     
+
+Y = img2mat("new-lena.png") 
+
+A = np.matrix([[1,2,3,4],
+               [5,6,7,8],
+               [9,10,11,12],
+               [13,14,15,16],
+               [17,18,19,20],
+               [21,22,23,24],
+               ])
+
+'''Y = np.matrix([[1,2],  
+               [3,4],   
+               [5,6],   
+               [7,8],   
+               [9,10],  
+               [11,12], 
+               ])
+'''
+y = Y[:,0]
+#y = np.array([[1],[2],[3],[4],[5],[6]])
+#cs_omp(y,A)
+#omp(A,y)
+#omp(Y.T,y)
+
+OMP(Y,Y)
+
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- O M P---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+im = Image.open('new-lena.png')
+im.show()
+im = im.convert("L")
+im = im.getdata()
+im = np.matrix(im)
+im = np.reshape(im,(500,500))
+print im
+
+#im = np.array(Image.open('lena.png')) #256*256
+
+
+sampleRate=0.7  
+Phi=np.random.randn(500*sampleRate,500)
+
+mat_dct_1d=np.zeros((500,500))
+v=range(500)
+for k in range(0,500):  
+    dct_1d=np.cos(np.dot(v,k*3.1415926/500))
+    if k>0:
+        dct_1d=dct_1d-np.mean(dct_1d)
+    mat_dct_1d[:,k]=dct_1d/np.linalg.norm(dct_1d)
+
+img_cs_1d=np.dot(Phi,im)
+
+def cs_omp(y,D):    
+#    L=math.floor(3*(y.shape[0])/4)
+    L=100
+    residual=y  
+    index=np.zeros((L),dtype=int)
+    for i in range(L):
+        index[i]= -1
+    result=np.zeros((500))
+    for j in range(L): 
+        product=np.fabs(np.dot(D.T,residual))
+        pos=np.argmax(product)          
+        index[j]=pos
+        my=np.linalg.pinv(D[:,index>=0])            
+        a=np.dot(my,y)      
+        residual=y-np.dot(D[:,index>=0],a)
+    result[index>=0]=a
+    return  result
+
+
+sparse_rec_1d=np.zeros((500,500))  
+Theta_1d=np.dot(Phi,mat_dct_1d)   
+for i in range(500):
+    
+    column_rec=cs_omp(img_cs_1d[:,i],Theta_1d)
+    sparse_rec_1d[:,i]=column_rec;        
+img_rec=np.dot(mat_dct_1d,sparse_rec_1d)      
+
+image2=Image.fromarray(img_rec)
+image2.show()
+
+#-------------------------------------------------------------------------------------------------------------------#
+#------------------------------------------- # 1 ----- S I G M A---------------------------------------------#
+#-------------------------------------------------------------------------------------------------------------------#
+
+dataMat = [[1,2,3,4],[5,6,7,8],[9,10,11,12]]
+
+U,Sigma,VT = linalg.svd(dataMat)
+
+print "U"
+print U
+
+print "\nSigma"
+print Sigma
+
+print "\nVT"
+print VT
