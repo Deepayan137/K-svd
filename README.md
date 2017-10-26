@@ -25,7 +25,7 @@ Since this is a collaborative work, please follow the guidelines so that there i
 
 ## Runnnig the code
 ``` bash
-python main.py -i imagename -iter 500 -coeff 2 -n_comp 100
+python image_denoising.py -i imagename -iter 500 -coeff 2 -n_comp 100
 ```
 ## optional parameters
 
