@@ -7,17 +7,16 @@ from operator import mul, sub
 from skimage.util.shape import *
 from skimage.util import pad
 from functools import reduce
-from math import floor, sqrt
+from math import floor, sqrt, log10
 from scipy.stats import chi2
+from scipy.sparse.linalg import svds
 import timeit
 import sys
 import pdb
-from sklearn.feature_extraction.image import extract_patches_2d
 from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 # import scipy as sp
 # import pdb
 # from sklearn.feature_extraction.image import extract_patches_2d
-# from sklearn.feature_extraction.image import reconstruct_from_patches_2d
 # from sklearn.datasets import make_sparse_coded_signal
 # from sklearn.decomposition import MiniBatchDictionaryLearning
 # from sklearn.linear_model import OrthogonalMatchingPursuit
@@ -30,22 +29,26 @@ args = vars(ap.parse_args())
 
 patch_size = 8
 
-
-sigma = 10                 # Noise standard dev.
+sigma = 20                 # Noise standard dev.
 
 window_shape = (patch_size, patch_size)    # Patches' shape
-step = 8                  # Patches' step
-ratio = 0.1            # Ratio for the dictionary (training set).
-ksvd_iter = 5   
+window_stride = 4                  # Patches' step
+dict_ratio = 0.1            # Ratio for the dictionary (training set).
+num_dict=256   
+ksvd_iter = 20   
+
+max_resize_dim = 256
+dict_train_blocks = 65000
+
 
 
 #-------------------------------------------------------------------------------------------------------------------#
 #-------------------------------------------------- PATCH CREATION -------------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
-def patch_matrix_windows(img, window_shape, step):
+def patch_matrix_windows(img, stride):
     # we return an array of patches(patch_size X num_patches)
-    patches = view_as_windows(img, window_shape, step=step)  # shape = [patches in image row,patches in image col,rows in patch,cols in patch]
+    patches = view_as_windows(img, window_shape, step=stride)  # shape = [patches in image row,patches in image col,rows in patch,cols in patch]
     # size of cond_patches = patch size X number of patches
     cond_patches = np.zeros((reduce(mul, patches.shape[2:4]), reduce(mul, patches.shape[0:2])))
     for i in range(patches.shape[0]):
@@ -54,116 +57,138 @@ def patch_matrix_windows(img, window_shape, step):
     return cond_patches, patches.shape
 
 
-def image_reconstruction_windows(mat_shape, patch_mat, patch_sizes, step):
-    img_out = np.zeros(mat_shape)
-    for l in range(patch_mat.shape[1]):
-        i, j = divmod(l, patch_sizes[1])
-        temp_patch = patch_mat[:, l].reshape((patch_sizes[2], patch_sizes[3]))
-        img_out[i*step:(i+1)*step, j*step:(j+1)*step] = temp_patch[:step, :step].astype(int)
+def reconstruct_image(input_shape, patch_final, noisy_image):
+    img_out = np.zeros(input_shape)
+    weight = np.zeros(input_shape)
+    num_blocks = input_shape[0] - patch_size + 1
+    for l in range(patch_final.shape[1]):
+        i, j = divmod(l, num_blocks)
+        temp_patch = patch_final[:, l].reshape(window_shape)
+        # img_out[i, j] = temp_patch[1, 1]
+        img_out[i:(i+patch_size), j:(j+patch_size)] = img_out[i:(i+patch_size), j:(j+patch_size)] + temp_patch
+        weight[i:(i+patch_size), j:(j+patch_size)] = weight[i:(i+patch_size), j:(j+patch_size)] + np.ones(window_shape)      
+
+    # img_out = img_out/weight
+    img_out = (noisy_image+0.034*sigma*img_out)/(1+0.034*sigma*weight);
+
+
+    print('max: ',np.max(img_out))
+
     return img_out
+
 
 #-------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------ APPROXIMATION PURSUIT METHOD : -----------------------------------------#
 #------------------------------------- MULTI-CHANNEL ORTHOGONAL MATCHING PURSUIT -----------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
-def single_channel_omp(phi, vect_y, sigma):
+def omp(D, data):
+    max_error = sqrt(((sigma**1.15)**2)*D.shape[0])
+    max_coeff = D.shape[0]/2
 
-    vect_sparse = np.zeros(phi.shape[1])
-    res = np.linalg.norm(vect_y)            # energy in the signal----sqrt( sum( square of signal elements ) )
-    atoms_list = []
+    sparse_coeff = np.zeros((D.shape[1],data.shape[1]))
+    tot_res = 0
+    for i in range(data.shape[1]):
+        count = floor((i+1)/float(data.shape[1])*100)
+        sys.stdout.write("\r- Sparse coding : Channel : %d%%" % count)
+        sys.stdout.flush()
+        
+        x = data[:,i]
+        res = x
+        atoms_list = []
+        indx = []
+        res_norm = np.linalg.norm(res)
+        temp_sparse = np.zeros(D.shape[1])
 
-    # print(phi.shape,vect_sparse.shape)
-    while res/sigma > sqrt(chi2.ppf(0.995, vect_y.shape[0] - 1)) and len(atoms_list) < phi.shape[1]:
-        vect_c = phi.T.dot(vect_y - phi.dot(vect_sparse))
-        i_0 = np.argmax(np.abs(vect_c))
-        atoms_list.append(i_0)
-        vect_sparse[i_0] += vect_c[i_0]
+        while res_norm > max_error and len(atoms_list) < max_coeff:
+            proj = D.T.dot(res)
+            i_0 = np.argmax(np.abs(proj))
+            atoms_list.append(i_0)
 
-        # Orthogonal projection.
-        index = np.where(vect_sparse)[0]
-        vect_sparse[index] = np.linalg.pinv(phi[:, index]).dot(vect_y)
-        res = np.linalg.norm(vect_y - phi.dot(vect_sparse))
+            temp_sparse = np.linalg.pinv(D[:,atoms_list]).dot(x)
+            res = x - D[:,atoms_list].dot(temp_sparse)
+            res_norm = np.linalg.norm(res)
 
-    return vect_sparse, atoms_list
+        tot_res += res_norm
+        if len(atoms_list) > 0:
+            sparse_coeff[atoms_list, i] = temp_sparse
+    print('\n',tot_res)
+    print ('\r- Sparse coding complete.\n')
 
-
+    return sparse_coeff
 
 #-------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------- DICTIONARY UPDATING METHODS -------------------------------------------#
+#------------------------------------------- DICTIONARY METHODS -------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
 
-def dict_update(phi, matrix_y, matrix_sparse, k):
-    indexes = np.where(matrix_sparse[k, :] != 0)[0]
-    phi_temp = phi
-    sparse_temp = matrix_sparse
+def dict_initiate(noisy_image, stride):
+    # dictionary intialization
+    noisy_patches, noisy_patches_shape = patch_matrix_windows(noisy_image, stride)
 
-    if len(indexes) > 0:
-        phi_temp[:, k][:] = 0
+    indexes = np.random.random_integers(0, noisy_patches.shape[1]-1, num_dict)   # indexes of patches for dictionary elements
+    dict_init = np.array(noisy_patches[:, indexes])            # each column is a new atom
 
-        matrix_e_k = matrix_y[:, indexes] - phi_temp.dot(sparse_temp[:, indexes])
+    # dictionary normalization
+    dict_init = dict_init - dict_init.mean()
+    temp = np.diag(pow(np.sqrt(np.sum(np.multiply(dict_init,dict_init),axis=0)), -1))
+    dict_init = dict_init.dot(temp)    
+    basis_sign = np.sign(dict_init[0,:])
+    dict_init = np.multiply(dict_init, basis_sign)
+
+    print( 'Shape of dictionary : ' , str(dict_init.shape) + '\n')
+    cv2.namedWindow('dict', cv2.WINDOW_NORMAL)
+    cv2.imshow('dict',dict_init.astype('double'))
+
+    return dict_init
+
+
+def dict_update(D, data, matrix_sparse, atom_id):
+    indices = np.where(matrix_sparse[atom_id, :] != 0)[0]
+    D_temp = D
+    sparse_temp = matrix_sparse[:,indices]
+
+    if len(indices) > 1:
+        sparse_temp[atom_id,:] = 0
+
+        matrix_e_k = data[:, indices] - D_temp.dot(sparse_temp)
         u, s, v = svds(np.atleast_2d(matrix_e_k), 1)
+        D_temp[:, atom_id] = u[:, 0]
+        matrix_sparse[atom_id, indices] = s.dot(v)
 
-        phi_temp[:, k] = u[:, 0]
-        sparse_temp[k, indexes] = np.asarray(v)[0] * s[0]
-    return phi_temp, sparse_temp
-
-
-def approx_update(phi, matrix_y, matrix_sparse, k):
-    indexes = np.where(matrix_sparse[k, :] != 0)[0]
-    phi_temp = phi
-
-    if len(indexes) > 0:
-        phi_temp[:, k] = 0
-        vect_g = matrix_sparse[k, indexes].T
-        vect_d = (matrix_y - phi_temp.dot(matrix_sparse))[:, indexes].dot(vect_g)
-        vect_d /= np.linalg.norm(vect_d)
-        vect_g = (matrix_y - phi_temp.dot(matrix_sparse))[:, indexes].T.dot(vect_d)
-        phi_temp[:, k] = vect_d
-        matrix_sparse[k, indexes] = vect_g.T
-    return phi_temp, matrix_sparse
-
+    return D_temp, matrix_sparse
 
 #-------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------------- K-SVD ALGORITHM -------------------------------------------------#
 #-------------------------------------------------------------------------------------------------------------------#
 
-def k_svd(phi, matrix_y, sigma, algorithm, n_iter, approx='yes'):
-    phi_temp = phi
-    #pdb.set_trace()                                              # X(size mxp) = phi(size mxn) x maatrix_sparse(size nxp)
-    matrix_sparse = np.zeros((phi.T.dot(matrix_y)).shape)       # initializing spare matrix
+def k_svd(D, data):
+    D_temp = D
+                                                            # X(size mxp) = D(size mxn) x matrix_sparse(size nxp)
+    matrix_sparse = np.zeros((D.T.dot(data)).shape)         # initializing spare matrix
     n_total = []
-
+    num_iter = ksvd_iter
     print ('\nK-SVD, with residual criterion.')
     print ('-------------------------------')
 
-    for k in range(n_iter):
-        print ("Stage " , str(k+1) , "/" , str(n_iter) , "...")
+    for k in range(num_iter):
+        print ("Stage " , str(k+1) , "/" , str(num_iter) , "...")
 
-        def sparse_coding(f):
-            t = f+1
-            print("Stage " , str(k+1),"- Sparse coding : Channel", t)
-            return algorithm(phi_temp, matrix_y[:, f], sigma)[0]
+        matrix_sparse = omp(D_temp, data)
 
-        sparse_rep = list(map(sparse_coding, range(matrix_y.shape[1])))
-        matrix_sparse = np.array(sparse_rep).T
-        print(matrix_sparse.shape)
+        dict_elem_num = D.shape[1]
         count = 1
 
-        updating_range = phi.shape[1]
-
-        for j in range(updating_range):
-            r = floor(count/float(updating_range)*100)
-            print("Stage " , str(k+1),"- Dictionary updating :",r, "%")
-            if approx == 'yes':
-                phi_temp, matrix_sparse = approx_update(phi_temp, matrix_y, matrix_sparse, j)
-            else:
-                phi_temp, matrix_sparse = dict_update(phi_temp, matrix_y, matrix_sparse, j)
+        for j in range(dict_elem_num):
+            r = floor(count/float(dict_elem_num)*100)
+            sys.stdout.write("\r- Dictionary updating : %d%%" % r)
+            sys.stdout.flush()
+            
+            D_temp, matrix_sparse = dict_update(D_temp, data, matrix_sparse, j)
             count += 1
         print ('\r- Dictionary updating complete.\n')
 
-    return phi_temp, matrix_sparse, n_total
+    return D_temp, matrix_sparse, n_total
 
 
 #-------------------------------------------------------------------------------------------------------------------#
@@ -171,82 +196,87 @@ def k_svd(phi, matrix_y, sigma, algorithm, n_iter, approx='yes'):
 #-------------------------------------------------------------------------------------------------------------------#
 
 
-def denoising(noisy_image, learning_image, window_shape, window_step, sigma, learning_ratio=0.1, ksvd_iter=1):
+def denoising(noisy_image):
 
     # 1. Form noisy patches.
     padded_noisy_image = pad(noisy_image, pad_width=window_shape, mode='symmetric')
-    noisy_patches, noisy_patches_shape = patch_matrix_windows(padded_noisy_image, window_shape, window_step)
-    padded_lea_image = pad(learning_image, pad_width=window_shape, mode='symmetric')
-    lea_patches, lea_patches_shape = patch_matrix_windows(padded_lea_image, window_shape, window_step)
-    # noisy_patches = extract_patches_2d(noisy_image, window_shape)
-    # noisy_patches = noisy_patches.reshape(noisy_patches.shape[0], -1).T
-    print ('Shape of dataset    : ' , str(noisy_patches.shape))
-
-    # 2. Form explanatory dictionary.
-    k = int(learning_ratio*lea_patches.shape[1])        # number of dictionary elements
-    # k = 256
-    indexes = np.random.random_integers(0, noisy_patches.shape[1]-1, k)   # indexes of patches for dictionary elements
 
     # dictionary intialization
-    basis = lea_patches[:, indexes]  
-    # basis = noisy_patches[:, indexes]            # each column is a new atom
-    basis /= np.sum(basis.T.dot(basis), axis=-1)    # dictionary normalization
-
-    print( 'Shape of dictionary : ' , str(basis.shape) + '\n')
+    dict_init = dict_initiate(padded_noisy_image, window_stride)
+ 
+    train_noisy_patches, train_noisy_patches_shape = patch_matrix_windows(padded_noisy_image, window_stride)
+    train_data_mean = train_noisy_patches.mean()
+    train_noisy_patches = train_noisy_patches - train_data_mean
 
     # 3. Compute K-SVD.
     start = timeit.default_timer()
-    basis_final, sparse_final, n_total = k_svd(basis, noisy_patches, sigma, single_channel_omp, ksvd_iter)
+    dict_final, sparse_init, n_total = k_svd(dict_init, train_noisy_patches)
+    stop = timeit.default_timer()
+    print ("Calculation time : " , str(stop - start) , ' seconds.')
+    # print(np.max(dict_final), np.max(sparse_init))
+
+
+    noisy_patches, noisy_patches_shape = patch_matrix_windows(padded_noisy_image, stride=1)
+    data_mean = noisy_patches.mean()
+    noisy_patches = noisy_patches - data_mean
+
+
+    start = timeit.default_timer()
+    sparse_final = omp(dict_final, noisy_patches)
     stop = timeit.default_timer()
     print ("Calculation time : " , str(stop - start) , ' seconds.')
 
     # 4. Reconstruct the image.
-    patches_approx = basis_final.dot(sparse_final)
-    padded_denoised_image = image_reconstruction_windows(padded_noisy_image.shape,
-                                                         patches_approx, noisy_patches_shape, window_step)  
-    # patches_approx = patches_approx.reshape(patches_approx.shape[1], *(8,8))                                                  
-    # denoised_image = reconstruct_from_patches_2d(patches_approx, (noisy_image.shape[0], noisy_image.shape[1]))
+    patches_approx = dict_final.dot(sparse_final) + data_mean
+
+    padded_denoised_image = reconstruct_image(padded_noisy_image.shape, patches_approx, padded_noisy_image)
+    # patches_approx = patches_approx.reshape(noisy_patches.shape[1], *(patch_size,patch_size))
+    # padded_denoised_image = reconstruct_from_patches_2d(patches_approx, (padded_noisy_image.shape[0]//2, padded_noisy_image.shape[1]//2))
 
     shrunk_0, shrunk_1 = tuple(map(sub, padded_denoised_image.shape, window_shape))
     denoised_image = np.abs(padded_denoised_image)[window_shape[0]:shrunk_0, window_shape[1]:shrunk_1]
+
     return denoised_image, stop - start, n_total
 
 
 
-
-
-
 image = cv2.imread(args['image'], 0)
-image = cv2.resize(image, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
-print(image.shape)
-# image = image / 255.
-# image = image[::2, ::2] + image[1::2, ::2] + image[::2, 1::2] + image[1::2, 1::2]
-# image /= 4.0
-# noisy_image = image.copy()
-# noisy_image += 0.075 * np.random.randn(image.shape[0], image.shape[1])
+
+max_init_size = max(image.shape[0], image.shape[1])
+resize_ratio = max_resize_dim/max_init_size
+
+if resize_ratio < 1:
+    image = cv2.resize(image, None, fx=resize_ratio, fy=resize_ratio, interpolation=cv2.INTER_AREA)
+
 noise_layer = np.random.normal(0, sigma ^ 2, image.size).reshape(image.shape).astype(int)
 noisy_image = image + noise_layer
-learning_image = noisy_image.copy()
-# learning_image = image.copy()
 
-# cv2.imshow('orignal', image)
-# cv2.imshow('noise_layer', noise_layer.astype('uint8'))
-# cv2.imshow('noisy_image', noisy_image)
-# cv2.imshow('learning_image', learning_image.astype('uint8'))
+denoised_image, calc_time, n_total = denoising(noisy_image)
 
-denoised_image, calc_time, n_total = denoising(noisy_image, learning_image, window_shape, step, sigma, ratio, ksvd_iter)
+noisy_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - noisy_image), 2)/noisy_image.size)
+# diff_psnr = 20*log10(np.amax(noisy_image)) - 10*log10(pow(np.linalg.norm(noisy_image - denoised_image), 2)/denoised_image.size)
+final_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - denoised_image), 2)/denoised_image.size)
+print(noisy_psnr, final_psnr)
 
-# denoising(noisy_image, learning_image, window_shape, step, sigma, ratio, ksvd_iter)
-#pdb.set_trace()
-
+cv2.namedWindow('orignal', cv2.WINDOW_NORMAL)
 cv2.imshow('orignal', image)
+cv2.namedWindow('noisy_image', cv2.WINDOW_NORMAL)
 cv2.imshow('noisy_image', noisy_image.astype('uint8'))
+cv2.namedWindow('denoised_image', cv2.WINDOW_NORMAL)
 cv2.imshow('denoised_image', denoised_image.astype('uint8'))
 
+name = ''
+
+# cv2.imwrite(name + '1 - Greysc image.jpg', Image.fromarray(np.uint8(image)))
+cv2.imwrite(name + '2 - Noisy image.jpg', noisy_image.astype('uint8'))
+
+cv2.imwrite(name + '3 - Out - Step ' + str(window_stride) + ' - kSVD ' + str(ksvd_iter) +
+       ' - Ratio ' + str(dict_ratio) + '.jpg', denoised_image.astype('uint8'))
+cv2.imwrite(name + '4 - Difference - Step ' + str(window_stride) + ' - kSVD ' + str(ksvd_iter) +
+       ' - Ratio ' + str(dict_ratio) + '.jpg', np.abs(noisy_image - denoised_image).astype('uint8'))
 
 
-
-cv2.waitKey(0)
-# while cv2.waitKey(-1) == 27:
-#     print('break')
-#     break
+# cv2.waitKey(0)
+while cv2.waitKey(-1) == 27:
+    print('break')
+    break
