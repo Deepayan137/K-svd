@@ -259,34 +259,35 @@ noisy_image = image + noise_layer
 
 # f = open('psnrVSnum_dict.txt','w')
 # f.write('dict_size' + '\tnoisy_psnr' + '\tfinal_psnr')
-f = open('psnrVSsparsity.txt','w')
-f.write('max_sparsity' + '\tnoisy_psnr' + '\tfinal_psnr')
+# f = open('psnrVSsparsity.txt','w')
+# f.write('max_sparsity' + '\tnoisy_psnr' + '\tfinal_psnr')
 
-for max_sparsity in range(1,11,1):
-    print('num_dict:',num_dict,'max_sparsity:',max_sparsity)
-    denoised_image, calc_time = denoising(noisy_image, dict_size=num_dict, sparsity=max_sparsity)
+# for max_sparsity in range(1,11,1):
+print('num_dict:',num_dict,'max_sparsity:',max_sparsity)
+denoised_image, calc_time = denoising(noisy_image, dict_size=num_dict, sparsity=max_sparsity)
 
-    noisy_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - noisy_image), 2)/noisy_image.size)
-    final_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - denoised_image), 2)/denoised_image.size)
-    print(noisy_psnr, final_psnr)
+noisy_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - noisy_image), 2)/noisy_image.size)
+final_psnr = 20*log10(np.amax(image)) - 10*log10(pow(np.linalg.norm(image - denoised_image), 2)/denoised_image.size)
+print(noisy_psnr, final_psnr)
 
-    # cv2.namedWindow('orignal', cv2.WINDOW_NORMAL)
-    # cv2.imshow('orignal', image.astype('uint8'))
-    # cv2.namedWindow('noisy_image', cv2.WINDOW_NORMAL)
-    # cv2.imshow('noisy_image', noisy_image.astype('uint8'))
-    # cv2.namedWindow('denoised_image', cv2.WINDOW_NORMAL)
-    # cv2.imshow('denoised_image', denoised_image.astype('uint8'))
-    # f.write('\n' + str(num_dict) + '\t' + str(noisy_psnr) + '\t' + str(final_psnr))
-    f.write('\n' + str(max_sparsity) + '\t' + str(noisy_psnr) + '\t' + str(final_psnr))
+cv2.namedWindow('orignal', cv2.WINDOW_NORMAL)
+cv2.imshow('orignal', image.astype('uint8'))
+cv2.namedWindow('noisy_image', cv2.WINDOW_NORMAL)
+cv2.imshow('noisy_image', noisy_image.astype('uint8'))
+cv2.namedWindow('denoised_image', cv2.WINDOW_NORMAL)
+cv2.imshow('denoised_image', denoised_image.astype('uint8'))
+# f.write('\n' + str(num_dict) + '\t' + str(noisy_psnr) + '\t' + str(final_psnr))
+# f.write('\n' + str(max_sparsity) + '\t' + str(noisy_psnr) + '\t' + str(final_psnr))
+# 
+# name = 'output/'
+name = ''
 
-    name = 'output/'
+# cv2.imwrite(name + '1 - Greysc image.jpg', Image.fromarray(np.uint8(image)))
+cv2.imwrite(name + '2 - Noisy image.jpg', noisy_image.astype('uint8'))
+cv2.imwrite(name + '3 - Out - sparsity ' + str(max_sparsity) + ' - num_dict ' + str(num_dict) + '.jpg', denoised_image.astype('uint8'))
+cv2.imwrite(name + '4 - Difference - sparsity ' + str(max_sparsity) + ' - num_dict ' + str(num_dict) + '.jpg', np.abs(noisy_image - denoised_image).astype('uint8'))
 
-    # cv2.imwrite(name + '1 - Greysc image.jpg', Image.fromarray(np.uint8(image)))
-    cv2.imwrite(name + '2 - Noisy image.jpg', noisy_image.astype('uint8'))
-    cv2.imwrite(name + '3 - Out - sparsity ' + str(max_sparsity) + ' - num_dict ' + str(num_dict) + '.jpg', denoised_image.astype('uint8'))
-    cv2.imwrite(name + '4 - Difference - sparsity ' + str(max_sparsity) + ' - num_dict ' + str(num_dict) + '.jpg', np.abs(noisy_image - denoised_image).astype('uint8'))
-
-f.close()
+# f.close()
 
 # cv2.waitKey(0)
 while cv2.waitKey(-1) == 27:
